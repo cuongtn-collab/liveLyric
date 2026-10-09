@@ -3,48 +3,60 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spotify LockScreen Hack</title>
+  <title>Spotify LockScreen Lyrics</title>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <style>
-    body { background: #000; color: #fff; font-family: sans-serif; text-align: center; padding: 20px; display: flex; flex-direction: column; justify-content: center; height: 100vh; }
-    button { background: #1DB954; color: #000; border: none; padding: 15px; border-radius: 25px; font-weight: bold; margin: 10px; width: 100%; max-width: 300px; }
-    #current-line { color: #1DB954; font-size: 1.5rem; font-weight: bold; margin-top: 30px; min-height: 50px; }
-    #next-line { color: #777; font-size: 1rem; }
+    body { background: #000; color: #fff; font-family: -apple-system, sans-serif; text-align: center; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    h1 { color: #1DB954; font-size: 1.5rem; margin-bottom: 10px; }
+    #status { color: #888; font-size: 0.9rem; margin-bottom: 20px; }
+    button { background: #1DB954; color: #000; border: none; padding: 15px; border-radius: 25px; font-weight: bold; margin: 8px; width: 100%; max-width: 320px; font-size: 1rem; cursor: pointer; }
+    button:active { transform: scale(0.98); }
+    #lyrics-container { margin-top: 40px; width: 100%; max-width: 400px; padding: 20px; background: #111; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+    #current-line { color: #1DB954; font-size: 1.4rem; font-weight: bold; min-height: 60px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+    #next-line { color: #777; font-size: 1rem; min-height: 30px; display: flex; align-items: center; justify-content: center; }
   </style>
 </head>
 <body>
 
+  <h1>Spotify Live Lyrics</h1>
   <div id="status">Chưa kết nối</div>
+  
   <button id="btn-login">1. Kết nối Spotify</button>
-  <button id="btn-sync">2. ÉP CHẠY LOCK SCREEN</button>
+  <button id="btn-sync">2. Bật Lời LockScreen</button>
 
-  <div id="current-line">Chờ đồng bộ...</div>
-  <div id="next-line">---</div>
+  <div id="lyrics-container">
+    <div id="current-line">Sẵn sàng đồng bộ...</div>
+    <div id="next-line">---</div>
+  </div>
 
-  <!-- Dùng file MP3 thật (im lặng) từ server thay vì Base64 để đánh lừa iOS -->
+  <!-- Audio 1 phút im lặng thật để giữ LockScreen -->
   <audio id="silent-audio" loop playsinline src="https://raw.githubusercontent.com/anars/blank-audio/master/1-minute-of-silence.mp3"></audio>
 
   <script>
     const CLIENT_ID = 'f915e38eaca44da3b7f38e9708f3b6d1';
     const CLIENT_SECRET = 'c7998fe9b4ab4dcb837ec1c9894f54fe';
     const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
-    
+    const SCOPES = 'user-read-currently-playing user-read-playback-state';
+
     let accessToken = localStorage.getItem('sp_acc_token');
+    let currentTrackName = '';
+    let parsedLyrics = [];
+    let lastDisplayedLyric = '';
     const silentAudio = document.getElementById('silent-audio');
 
-    // Chạm để mở khóa audio
+    // Kích hoạt audio ngầm khi chạm màn hình để vượt rào iOS
     document.body.addEventListener('touchstart', () => {
       if (silentAudio.paused) silentAudio.play().catch(()=>{});
     }, { once: true });
 
     document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('btn-login').addEventListener('click', () => {
-        window.location.href = `https://accounts.spotify.com/authorize?response_type=code&client_id=${CLIENT_ID}&scope=user-read-currently-playing&redirect_uri=${REDIRECT_URI}`;
+        const params = new URLSearchParams({ response_type: 'code', client_id: CLIENT_ID, scope: SCOPES, redirect_uri: REDIRECT_URI });
+        window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
       });
 
       document.getElementById('btn-sync').addEventListener('click', () => {
-        silentAudio.play();
-        // Ép iOS ghi nhận đây là trình phát nhạc đang chạy
+        silentAudio.play().catch(()=>{});
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
         startSync();
       });
@@ -55,42 +67,115 @@
         window.history.replaceState({}, document.title, window.location.pathname);
         await fetchToken(code);
       }
-      if (accessToken) document.getElementById('status').innerText = '✓ Đã kết nối';
+      if (accessToken) document.getElementById('status').innerText = '✓ Đã kết nối Spotify';
     });
 
     async function fetchToken(code) {
-      const res = await fetch('https://accounts.spotify.com/api/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${btoa(CLIENT_ID+':'+CLIENT_SECRET)}` },
-        body: new URLSearchParams({ grant_type: 'authorization_code', code: code, redirect_uri: REDIRECT_URI })
+      const basicAuth = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
+      try {
+        const res = await fetch('https://accounts.spotify.com/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${basicAuth}` },
+          body: new URLSearchParams({ grant_type: 'authorization_code', code: code, redirect_uri: REDIRECT_URI })
+        });
+        const data = await res.json();
+        if (data.access_token) {
+          accessToken = data.access_token;
+          localStorage.setItem('sp_acc_token', accessToken);
+          document.getElementById('status').innerText = '✓ Đã kết nối Spotify';
+        }
+      } catch (err) {}
+    }
+
+    async function fetchLyrics(trackName, artistName) {
+      try {
+        const res = await fetch(`https://lrclib.net/api/get?track_name=${encodeURIComponent(trackName)}&artist_name=${encodeURIComponent(artistName)}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data && data.syncedLyrics ? parseLRC(data.syncedLyrics) : [];
+      } catch (err) { return []; }
+    }
+
+    function parseLRC(lrcText) {
+      const result = [];
+      const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+      lrcText.split('\n').forEach(line => {
+        const match = line.match(regex);
+        if (match && match[4].trim()) {
+          const totalTime = parseInt(match[1]) * 60 + parseInt(match[2]) + parseFloat(`0.${match[3]}`);
+          result.push({ time: totalTime, text: match[4].trim() });
+        }
       });
-      const data = await res.json();
-      if (data.access_token) { accessToken = data.access_token; localStorage.setItem('sp_acc_token', accessToken); document.getElementById('status').innerText = '✓ Đã kết nối'; }
+      return result.sort((a, b) => a.time - b.time);
     }
 
     async function startSync() {
+      if (!accessToken) {
+        alert('Vui lòng Kết nối Spotify trước!');
+        return;
+      }
+
       setInterval(async () => {
-        if (!accessToken) return;
         try {
-          const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${accessToken}` } });
-          if (res.status !== 200) return;
-          const data = await res.json();
-          const song = data.item.name;
-          const artist = data.item.artists[0].name;
+          const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
           
-          // Giả lập lyrics (Vì LRCLib đôi khi lỗi, ta test bằng tên bài hát trước để xem Lock Screen có hiện không)
-          const text1 = `Đang phát: ${song}`;
-          const text2 = artist;
+          if (res.status === 204 || res.status > 400) return;
+          const data = await res.json();
+          if (!data || !data.is_playing) return;
 
-          document.getElementById('current-line').innerText = text1;
-          document.getElementById('next-line').innerText = text2;
+          const songTitle = data.item.name;
+          const artistName = data.item.artists[0].name;
+          const progressSec = data.progress_ms / 1000;
 
-          // CẬP NHẬT LOCK SCREEN LIÊN TỤC
-          if ('mediaSession' in navigator) {
-            navigator.mediaSession.metadata = new MediaMetadata({ title: text1, artist: text2, album: 'Spotify Lyrics' });
+          // Nếu chuyển bài hát, gọi API lấy lời mới
+          if (currentTrackName !== songTitle) {
+            currentTrackName = songTitle;
+            document.getElementById('status').innerText = `Đang phát: ${songTitle}`;
+            parsedLyrics = await fetchLyrics(songTitle, artistName);
+            lastDisplayedLyric = '';
+          }
+
+          if (parsedLyrics.length === 0) {
+            updateLockScreen('Không tìm thấy lời', songTitle);
+            return;
+          }
+
+          // Tìm câu hát hiện tại (+0.3s để bù độ trễ mạng)
+          let currentIndex = -1;
+          for (let i = 0; i < parsedLyrics.length; i++) {
+            if (progressSec + 0.3 >= parsedLyrics[i].time) currentIndex = i;
+            else break;
+          }
+
+          if (currentIndex !== -1) {
+            const currentText = parsedLyrics[currentIndex].text;
+            const nextText = (currentIndex + 1 < parsedLyrics.length) ? parsedLyrics[currentIndex + 1].text : '';
+            
+            // Chỉ cập nhật khi lời thực sự thay đổi để tránh lag Màn hình khóa
+            if (currentText !== lastDisplayedLyric) {
+              updateLockScreen(currentText, nextText);
+              lastDisplayedLyric = currentText;
+            }
           }
         } catch (e) {}
-      }, 2000);
+      }, 1500);
+    }
+
+    function updateLockScreen(current, next) {
+      // Cập nhật giao diện Web
+      document.getElementById('current-line').innerText = current;
+      document.getElementById('next-line').innerText = next;
+
+      // ĐẨY LÊN MÀN HÌNH KHÓA iOS
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: current,       // Dòng chữ to trên LockScreen
+          artist: next,         // Dòng chữ nhỏ trên LockScreen
+          album: 'Spotify Lyrics'
+        });
+      }
     }
   </script>
 </body>
