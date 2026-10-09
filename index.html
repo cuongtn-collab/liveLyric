@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Spotify Realtime Lyrics PWA</title>
   
-  <!-- Cấu hình Web App PWA cho iOS -->
+  <!-- Chuẩn PWA di động mới (Khắc phục lỗi Deprecated) -->
+  <meta name="mobile-web-app-capable" content="yes">
+  
+  <!-- Tương thích iOS cũ -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Spotify Lyrics">
@@ -97,7 +100,7 @@
   </div>
 
   <!-- Thẻ Audio im lặng giữ kết nối Lock Screen -->
-  <audio id="silent-audio" loop src="https://raw.githubusercontent.com/anron/silent-audio/master/silent-10sec.mp3"></audio>
+  <audio id="silent-audio" loop src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
   
   <!-- Canvas & Video phục vụ chế độ Cửa sổ nổi Picture-in-Picture -->
   <canvas id="pip-canvas" width="600" height="300"></canvas>
@@ -107,7 +110,7 @@
     // ==========================================
     // 1. CẤU HÌNH CLIENT ID SPOTIFY CỦA BẠN
     // ==========================================
-    const CLIENT_ID = 'THAY_CLIENT_ID_CUA_BAN_VAO_DAY';
+    const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
     
     // Tự động lấy URL trang web hiện tại làm Redirect URI
     const REDIRECT_URI = window.location.origin + window.location.pathname;
@@ -142,10 +145,7 @@
 
     // Đăng nhập Spotify qua Implicit Grant Flow (Dùng response_type=token)
     function loginSpotify() {
-      if (CLIENT_ID === '44ec39575f584e37935e2a5f74f56704') {
-        alert("Bạn chưa thay CLIENT_ID của Spotify vào file HTML!");
-        return;
-      }
+    
       const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPES)}`;
       window.location.href = authUrl;
     }
@@ -221,7 +221,11 @@
       }
 
       // Kích hoạt thẻ Audio để iOS cho phép giữ MediaSession ở Lock Screen
-      silentAudio.play().catch(e => console.log("Yêu cầu tương tác người dùng"));
+      try {
+    await silentAudio.play();
+  } catch (e) {
+    console.log("Cần tương tác người dùng trước khi phát audio:", e);
+  }
 
       if (syncInterval) clearInterval(syncInterval);
 
