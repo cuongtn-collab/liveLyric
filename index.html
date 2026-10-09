@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Spotify Realtime Lyrics PWA</title>
   
+  <!-- Chuẩn PWA di động mới nhất -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -92,7 +93,7 @@
     <div id="next-line" class="next-line">---</div>
   </div>
 
-  <!-- Audio im lặng Base64 Data URI giúp duy trì chạy nền không bị chặn 404 -->
+  <!-- Audio im lặng Base64 Data URI (Bắt buộc dùng playsinline để chạy trên iOS) -->
   <audio id="silent-audio" loop playsinline src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
   
   <canvas id="pip-canvas" width="600" height="300"></canvas>
@@ -106,12 +107,12 @@
     const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
     const SCOPES = 'user-read-currently-playing user-read-playback-state';
 
-    // Biến toàn cục
-    let accessToken = localStorage.getItem('spotify_access_token');
+    // Đổi tên biến storage thành v2 để ép trình duyệt đăng nhập lại, xóa token lỗi 403 cũ
+    let accessToken = localStorage.getItem('spotify_token_v2'); 
     let currentTrackName = '';
     let parsedLyrics = [];
     let syncInterval = null;
-    let lastDisplayedLyric = ''; // BIẾN CHỐNG LAG: Lưu câu hát đang hiển thị
+    let lastDisplayedLyric = ''; // Chống Lag: Lưu câu hát đang hiển thị
 
     const silentAudio = document.getElementById('silent-audio');
     const canvas = document.getElementById('pip-canvas');
@@ -119,10 +120,26 @@
     const video = document.getElementById('pip-video');
 
     document.addEventListener('DOMContentLoaded', async () => {
+      // 1. Nút Đăng nhập
       document.getElementById('btn-login').addEventListener('click', loginSpotify);
-      document.getElementById('btn-sync').addEventListener('click', startSync);
+      
+      // 2. Nút Bật Lời (XỬ LÝ ĐỒNG BỘ ĐỂ VƯỢT RÀO iOS)
+      document.getElementById('btn-sync').addEventListener('click', () => {
+        // Play Audio ngay lập tức khi người dùng click, không dùng async/await
+        silentAudio.play().then(() => {
+          console.log("Audio nền đã được iOS cấp phép chạy!");
+        }).catch(err => {
+          alert("iOS vẫn chặn. Hãy vuốt nhẹ màn hình rồi bấm lại nút này.");
+        });
+        
+        // Gọi hàm đồng bộ
+        startSync();
+      });
+
+      // 3. Nút PiP
       document.getElementById('btn-pip').addEventListener('click', togglePiP);
       
+      // Xử lý callback sau khi Spotify redirect về (PKCE)
       const args = new URLSearchParams(window.location.search);
       const code = args.get('code');
 
@@ -166,13 +183,13 @@
         state: generateRandomString(16),
         code_challenge_method: 'S256',
         code_challenge: codeChallenge,
-        show_dialog: 'true' // Ép cấp quyền lại để sửa lỗi 403 Cache
+        show_dialog: 'true' // Ép Spotify hiện bảng hỏi lại để nhận quyền chuẩn (sửa lỗi 403)
       });
 
       window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
     }
 
-    // --- LẤY ACCESS TOKEN ---
+    // --- ĐỔI CODE LẤY ACCESS TOKEN ---
     async function fetchAccessToken(code) {
       const codeVerifier = localStorage.getItem('code_verifier');
       if (!codeVerifier) return;
@@ -192,7 +209,8 @@
         const data = await response.json();
         if (data.access_token) {
           accessToken = data.access_token;
-          localStorage.setItem('spotify_access_token', accessToken);
+          // Lưu vào biến V2 mới
+          localStorage.setItem('spotify_token_v2', accessToken);
           document.getElementById('status').innerText = '✓ Đã kết nối Spotify thành công!';
         }
       } catch (err) {
@@ -200,14 +218,15 @@
       }
     }
 
-    // --- API CALLS ---
+    // --- API CALLS: SPOTIFY & LRCLIB ---
     async function getCurrentlyPlaying() {
       if (!accessToken) return null;
       try {
         const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        if (response.status === 204 || response.status > 400) return null;
+        // 204 là Spotify đang không phát trên thiết bị nào
+        if (response.status === 204 || response.status > 400) return null; 
         return await response.json();
       } catch (err) {
         return null;
@@ -239,25 +258,16 @@
       return result.sort((a, b) => a.time - b.time);
     }
 
-    // --- VÒNG LẶP ĐỒNG BỘ TỐI ƯU ---
+    // --- VÒNG LẶP ĐỒNG BỘ ---
     async function startSync() {
       if (!accessToken) {
         alert("Vui lòng bấm '1. Kết nối Spotify' trước!");
         return;
       }
 
-      // 1. Kích hoạt Audio Nền
-      try {
-        await silentAudio.play();
-        console.log("Audio nền đã khởi chạy");
-      } catch (e) {
-        alert("Trình duyệt chặn chạy nền. Vui lòng chạm vào màn hình và bấm lại.");
-        return;
-      }
-
       if (syncInterval) clearInterval(syncInterval);
 
-      // 2. Lặp mỗi 1.5s để giảm tải
+      // Lặp mỗi 1.5s để tiết kiệm tài nguyên
       syncInterval = setInterval(async () => {
         const data = await getCurrentlyPlaying();
         
@@ -273,12 +283,12 @@
         const artistName = data.item.artists[0].name;
         const progressSec = data.progress_ms / 1000;
 
-        // Nếu chuyển bài hát
+        // Xử lý đổi bài hát mới
         if (currentTrackName !== songTitle) {
           currentTrackName = songTitle;
           document.getElementById('status').innerText = `Đang phát: ${songTitle} - ${artistName}`;
           parsedLyrics = await fetchLyrics(songTitle, artistName);
-          lastDisplayedLyric = ""; // Reset trạng thái chống lag
+          lastDisplayedLyric = ""; 
         }
 
         if (parsedLyrics.length === 0) {
@@ -289,7 +299,7 @@
           return;
         }
 
-        // Tìm câu hát (+0.3s để bù độ trễ mạng)
+        // Khớp lời (+0.3s để giảm độ trễ)
         let currentIndex = -1;
         for (let i = 0; i < parsedLyrics.length; i++) {
           if (progressSec + 0.3 >= parsedLyrics[i].time) currentIndex = i;
@@ -300,7 +310,7 @@
           const currentText = parsedLyrics[currentIndex].text;
           const nextText = (currentIndex + 1 < parsedLyrics.length) ? parsedLyrics[currentIndex + 1].text : '';
           
-          // 3. CHÌA KHÓA CHỐNG LAG: Chỉ Render và Đẩy dữ liệu khi câu hát thay đổi
+          // CHỈ CẬP NHẬT KHI LỜI THAY ĐỔI -> Chống lag iOS
           if (currentText !== lastDisplayedLyric) {
             updateDisplay(currentText, nextText);
             lastDisplayedLyric = currentText;
@@ -309,12 +319,12 @@
       }, 1500); 
     }
 
-    // --- CẬP NHẬT UI, MEDIA SESSION & CANVAS ---
+    // --- CẬP NHẬT GIAO DIỆN, LOCKSCREEN & PIP ---
     function updateDisplay(currentText, nextText) {
       document.getElementById('current-line').innerText = currentText;
       document.getElementById('next-line').innerText = nextText;
 
-      // Cập nhật Màn hình khóa
+      // Cập nhật Màn hình khóa (Media Session API)
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: currentText,
@@ -323,7 +333,7 @@
         });
       }
 
-      // Cập nhật PiP
+      // Cập nhật Canvas PiP
       ctx.fillStyle = '#121212';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#1DB954';
@@ -335,7 +345,7 @@
       ctx.fillText(nextText, canvas.width / 2, 190);
     }
 
-    // --- PICTURE IN PICTURE ---
+    // --- PICTURE IN PICTURE (CỬA SỔ NỔI) ---
     async function togglePiP() {
       try {
         if (document.pictureInPictureElement) {
