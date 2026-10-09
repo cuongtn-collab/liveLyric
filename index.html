@@ -110,11 +110,14 @@
     // ==========================================
     // 1. CẤU HÌNH CLIENT ID SPOTIFY CỦA BẠN
     // ==========================================
-    const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
-    
-    // Tự động lấy URL trang web hiện tại làm Redirect URI
-    const REDIRECT_URI = window.location.origin + window.location.pathname;
-    const SCOPES = 'user-read-currently-playing user-read-playback-state';
+    // ==========================================
+// CẤU HÌNH SPOTIFY
+// ==========================================
+const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
+
+// Khai báo cố định khớp tuyệt đối với GitHub Pages
+const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
+const SCOPES = 'user-read-currently-playing user-read-playback-state';
 
     let accessToken = null;
     let currentTrackName = '';
