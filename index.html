@@ -1,311 +1,270 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spotify Realtime Lyrics PWA</title>
-  
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Spotify Lyrics">
+<script>
+  const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
+  const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
+  const SCOPES = 'user-read-currently-playing user-read-playback-state';
 
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      background-color: #121212;
-      color: #ffffff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      margin: 0;
-      padding: 20px;
-      text-align: center;
+  const LS_TOKEN = 'spotify_token_v4';
+  const LS_REFRESH = 'spotify_refresh_v4';
+  const LS_EXPIRES = 'spotify_expires_v4';
+
+  let accessToken = localStorage.getItem(LS_TOKEN);
+  let refreshToken = localStorage.getItem(LS_REFRESH);
+  let expiresAt = parseInt(localStorage.getItem(LS_EXPIRES) || '0');
+  if (accessToken === 'undefined' || accessToken === 'null') accessToken = null;
+
+  let currentTrackName = '';
+  let parsedLyrics = [];
+  let syncInterval = null;
+  let lastDisplayedLyric = '';
+  let busy = false; // tránh gọi chồng nhau
+
+  const silentAudio = document.getElementById('silent-audio');
+  const canvas = document.getElementById('pip-canvas');
+  const ctx = canvas.getContext('2d');
+  const video = document.getElementById('pip-video');
+  const setStatus = (t) => document.getElementById('status').innerText = t;
+
+  document.body.addEventListener('touchstart', () => {
+    if (silentAudio.paused) silentAudio.play().catch(() => {});
+  }, { once: true });
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    document.getElementById('btn-login').addEventListener('click', loginSpotify);
+    document.getElementById('btn-sync').addEventListener('click', () => {
+      silentAudio.play().catch(() => {});
+      startSync();
+    });
+    document.getElementById('btn-pip').addEventListener('click', togglePiP);
+
+    const args = new URLSearchParams(window.location.search);
+    const code = args.get('code');
+    const error = args.get('error');
+
+    if (error) setStatus('Spotify từ chối: ' + error);
+
+    if (code) {
+      setStatus('Đang xử lý Token...');
+      window.history.replaceState({}, document.title, window.location.pathname); // xóa code ngay, code chỉ dùng 1 lần
+      await fetchAccessToken(code);
     }
 
-    h1 { color: #1DB954; font-size: 1.5rem; margin-bottom: 8px; }
-    .status { color: #aaaaaa; font-size: 0.9rem; margin-bottom: 24px; }
+    if (accessToken) setStatus('✓ Đã kết nối Spotify thành công!');
+  });
 
-    .btn {
-      background-color: #1DB954;
-      color: #000000;
-      border: none;
-      padding: 14px 24px;
-      border-radius: 25px;
-      font-size: 0.95rem;
-      font-weight: bold;
-      cursor: pointer;
-      margin: 8px;
-      width: 100%;
-      max-width: 320px;
-      transition: background-color 0.2s, transform 0.1s;
+  // --- PKCE ---
+  function generateRandomString(length) {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < length; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
+    return text;
+  }
+  async function generateCodeChallenge(codeVerifier) {
+    const data = new TextEncoder().encode(codeVerifier);
+    const digest = await window.crypto.subtle.digest('SHA-256', data);
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // --- TOKEN ---
+  function saveTokens(data) {
+    accessToken = data.access_token;
+    expiresAt = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
+    localStorage.setItem(LS_TOKEN, accessToken);
+    localStorage.setItem(LS_EXPIRES, String(expiresAt));
+    if (data.refresh_token) {
+      refreshToken = data.refresh_token;
+      localStorage.setItem(LS_REFRESH, refreshToken);
     }
-    .btn:active { background-color: #1ed760; transform: scale(0.98); }
+  }
 
-    #lyrics-container {
-      margin-top: 24px;
-      padding: 20px;
-      border-radius: 16px;
-      background: #181818;
-      width: 100%;
-      max-width: 360px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  function clearTokens() {
+    accessToken = refreshToken = null;
+    expiresAt = 0;
+    [LS_TOKEN, LS_REFRESH, LS_EXPIRES].forEach(k => localStorage.removeItem(k));
+  }
+
+  async function loginSpotify() {
+    const codeVerifier = generateRandomString(128);
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    localStorage.setItem('code_verifier', codeVerifier);
+
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: CLIENT_ID,
+      scope: SCOPES,
+      redirect_uri: REDIRECT_URI,
+      state: generateRandomString(16),
+      code_challenge_method: 'S256',
+      code_challenge: codeChallenge,
+      show_dialog: 'true'
+    });
+    window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
+  }
+
+  async function fetchAccessToken(code) {
+    const codeVerifier = localStorage.getItem('code_verifier');
+    if (!codeVerifier) {
+      alert('Lỗi: Không tìm thấy mã xác thực. Vui lòng bấm Kết nối lại.');
+      return;
     }
-
-    .current-line {
-      color: #1DB954;
-      font-size: 1.25rem;
-      font-weight: bold;
-      margin-bottom: 12px;
-      min-height: 50px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .next-line {
-      color: #777777;
-      font-size: 0.95rem;
-      min-height: 30px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    canvas, video { display: none; }
-  </style>
-</head>
-<body>
-
-  <h1>Spotify Realtime Lyrics</h1>
-  <div id="status" class="status">Chưa đăng nhập Spotify</div>
-
-  <button id="btn-login" class="btn">1. Kết nối Spotify</button>
-  <button id="btn-sync" class="btn">2. Bật Lời LockScreen</button>
-  <button id="btn-pip" class="btn">3. Bật Cửa sổ nổi (PiP)</button>
-
-  <div id="lyrics-container">
-    <div id="current-line" class="current-line">Bấm 'Kết nối Spotify' để bắt đầu</div>
-    <div id="next-line" class="next-line">---</div>
-  </div>
-
-  <!-- Audio im lặng Base64 Data URI -->
-  <audio id="silent-audio" loop playsinline src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
-  
-  <canvas id="pip-canvas" width="600" height="300"></canvas>
-  <video id="pip-video" autoplay playsinline muted></video>
-
-  <script>
-    // ==========================================
-    // CẤU HÌNH SPOTIFY (ĐÃ ĐIỀN ĐÚNG CỦA BẠN)
-    // ==========================================
-    const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
-    const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
-    const SCOPES = 'user-read-currently-playing user-read-playback-state';
-
-    let accessToken = localStorage.getItem('spotify_token_v2'); 
-    let currentTrackName = '';
-    let parsedLyrics = [];
-    let syncInterval = null;
-    let lastDisplayedLyric = ''; 
-
-    const silentAudio = document.getElementById('silent-audio');
-    const canvas = document.getElementById('pip-canvas');
-    const ctx = canvas.getContext('2d');
-    const video = document.getElementById('pip-video');
-
-    // --- MỞ KHÓA AUDIO CHO iOS BẰNG SỰ KIỆN CHẠM ---
-    document.body.addEventListener('touchstart', () => {
-      if (silentAudio.paused) {
-        silentAudio.play().then(() => {
-          console.log("Đã bẻ khóa Audio iOS thành công qua Touch!");
-        }).catch(() => {});
-      }
-    }, { once: true });
-
-    document.addEventListener('DOMContentLoaded', async () => {
-      document.getElementById('btn-login').addEventListener('click', loginSpotify);
-      
-      document.getElementById('btn-sync').addEventListener('click', () => {
-        // Cố gắng mở khóa lần 2 nếu lần 1 thất bại
-        silentAudio.play().catch(err => {
-          console.log("Audio bị chặn, chờ người dùng tương tác.");
-        });
-        startSync();
+    try {
+      const response = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: CLIENT_ID,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT_URI,
+          code_verifier: codeVerifier,
+        }),
       });
-
-      document.getElementById('btn-pip').addEventListener('click', togglePiP);
-      
-      const args = new URLSearchParams(window.location.search);
-      const code = args.get('code');
-
-      if (code) {
-        await fetchAccessToken(code);
-        window.history.replaceState({}, document.title, window.location.pathname);
+      const data = await response.json();
+      if (data.access_token) {
+        saveTokens(data);
+        localStorage.removeItem('code_verifier');
+      } else {
+        alert('Spotify từ chối cấp Token:\n' + JSON.stringify(data));
       }
+    } catch (err) {
+      alert('Lỗi mạng khi cấp Token!');
+    }
+  }
 
-      if (accessToken) {
-        document.getElementById('status').innerText = '✓ Đã kết nối Spotify thành công!';
+  async function refreshAccessToken() {
+    if (!refreshToken) return false;
+    try {
+      const response = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: CLIENT_ID,
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+        }),
+      });
+      const data = await response.json();
+      if (data.access_token) { saveTokens(data); return true; }
+    } catch (e) {}
+    return false;
+  }
+
+  async function ensureToken() {
+    if (!accessToken) return false;
+    if (Date.now() >= expiresAt) return await refreshAccessToken();
+    return true;
+  }
+
+  function stopSync(msg) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+    if (msg) setStatus(msg);
+  }
+
+  // --- LẤY BÀI HÁT ---
+  async function getCurrentlyPlaying(retried = false) {
+    if (!(await ensureToken())) {
+      clearTokens();
+      stopSync('Phiên hết hạn, hãy bấm "1. Kết nối Spotify" lại.');
+      return null;
+    }
+
+    let response;
+    try {
+      response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+    } catch (err) { return null; }
+
+    if (response.status === 204) return null;
+
+    if (response.status === 401) {
+      // token hết hạn thật -> thử refresh 1 lần
+      if (!retried && await refreshAccessToken()) return getCurrentlyPlaying(true);
+      clearTokens();
+      stopSync('Phiên hết hạn, hãy bấm "1. Kết nối Spotify" lại.');
+      return null;
+    }
+
+    if (response.status === 403) {
+      const errData = await response.json().catch(() => ({}));
+      const msg = errData?.error?.message || 'Không có mô tả';
+      stopSync('Spotify từ chối (403): ' + msg);
+      // Chỉ xóa token nếu lỗi do thiếu scope; các lỗi khác (chưa được thêm vào
+      // User Management) thì đăng nhập lại cũng vô ích.
+      if (/scope/i.test(msg)) clearTokens();
+      alert(
+        `LỖI 403 từ Spotify:\n"${msg}"\n\n` +
+        `Nếu là "User not registered in the Developer Dashboard": vào Dashboard → ` +
+        `app → Settings → User Management và thêm email tài khoản Spotify của bạn.`
+      );
+      return null;
+    }
+
+    if (response.status === 429) return null; // quá nhiều request, bỏ qua lượt này
+    if (!response.ok) return null;
+
+    return await response.json().catch(() => null);
+  }
+
+  async function fetchLyrics(trackName, artistName) {
+    try {
+      const response = await fetch(`https://lrclib.net/api/get?track_name=${encodeURIComponent(trackName)}&artist_name=${encodeURIComponent(artistName)}`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      return data && data.syncedLyrics ? parseLRC(data.syncedLyrics) : [];
+    } catch (err) { return []; }
+  }
+
+  function parseLRC(lrcText) {
+    const result = [];
+    const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+    lrcText.split('\n').forEach(line => {
+      const match = line.match(regex);
+      if (match && match[4].trim()) {
+        const totalTime = parseInt(match[1]) * 60 + parseInt(match[2]) + parseFloat(`0.${match[3]}`);
+        result.push({ time: totalTime, text: match[4].trim() });
       }
     });
+    return result.sort((a, b) => a.time - b.time);
+  }
 
-    // --- HÀM PKCE ---
-    function generateRandomString(length) {
-      let text = '';
-      const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-      for (let i = 0; i < length; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
-      return text;
+  async function startSync() {
+    if (!accessToken) {
+      alert("Vui lòng bấm '1. Kết nối Spotify' trước!");
+      return;
     }
+    if (syncInterval) clearInterval(syncInterval);
 
-    async function generateCodeChallenge(codeVerifier) {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(codeVerifier);
-      const digest = await window.crypto.subtle.digest('SHA-256', data);
-      return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
-
-    // --- ĐĂNG NHẬP SPOTIFY ---
-    async function loginSpotify() {
-      const codeVerifier = generateRandomString(128);
-      const codeChallenge = await generateCodeChallenge(codeVerifier);
-      localStorage.setItem('code_verifier', codeVerifier);
-
-      const params = new URLSearchParams({
-        response_type: 'code',
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        redirect_uri: REDIRECT_URI,
-        state: generateRandomString(16),
-        code_challenge_method: 'S256',
-        code_challenge: codeChallenge,
-        show_dialog: 'true' 
-      });
-
-      window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
-    }
-
-    // --- LẤY ACCESS TOKEN ---
-    async function fetchAccessToken(code) {
-      const codeVerifier = localStorage.getItem('code_verifier');
-      if (!codeVerifier) return;
-
+    syncInterval = setInterval(async () => {
+      if (busy) return;
+      busy = true;
       try {
-        const response = await fetch('https://accounts.spotify.com/api/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            client_id: CLIENT_ID,
-            grant_type: 'authorization_code',
-            code: code,
-            redirect_uri: REDIRECT_URI,
-            code_verifier: codeVerifier,
-          }),
-        });
-        const data = await response.json();
-        if (data.access_token) {
-          accessToken = data.access_token;
-          localStorage.setItem('spotify_token_v2', accessToken);
-          document.getElementById('status').innerText = '✓ Đã kết nối Spotify thành công!';
-        }
-      } catch (err) {
-        console.error("Lỗi lấy Token:", err);
-      }
-    }
-
-    // --- LẤY THÔNG TIN BÀI HÁT TỪ SPOTIFY (TỰ ĐỘNG BẮT LỖI 403) ---
-    async function getCurrentlyPlaying() {
-      if (!accessToken) return null;
-      try {
-        const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        
-        // NẾU TOKEN HẾT HẠN HOẶC BỊ TỪ CHỐI
-        if (response.status === 403 || response.status === 401) {
-          console.error("Lỗi quyền hoặc Token hết hạn (403/401)");
-          clearInterval(syncInterval); // Dừng vòng lặp
-          
-          // Xóa token lỗi
-          localStorage.removeItem('spotify_token_v2'); 
-          localStorage.removeItem('code_verifier');
-          
-          alert("Phiên kết nối Spotify đã hết hạn (sau 60 phút). Vui lòng bấm '1. Kết nối Spotify' để kết nối lại!");
-          window.location.href = REDIRECT_URI; // Tải lại web
-          return null;
-        }
-
-        if (response.status === 204 || response.status > 400) return null; 
-        return await response.json();
-      } catch (err) {
-        return null;
-      }
-    }
-
-    // --- LẤY LỜI BÀI HÁT TỪ LRCLIB ---
-    async function fetchLyrics(trackName, artistName) {
-      try {
-        const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(trackName)}&artist_name=${encodeURIComponent(artistName)}`;
-        const response = await fetch(url);
-        if (!response.ok) return [];
-        const data = await response.json();
-        return data && data.syncedLyrics ? parseLRC(data.syncedLyrics) : [];
-      } catch (err) {
-        return [];
-      }
-    }
-
-    function parseLRC(lrcText) {
-      const result = [];
-      const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
-      lrcText.split('\n').forEach(line => {
-        const match = line.match(regex);
-        if (match && match[4].trim()) {
-          const totalTime = parseInt(match[1]) * 60 + parseInt(match[2]) + parseFloat(`0.${match[3]}`);
-          result.push({ time: totalTime, text: match[4].trim() });
-        }
-      });
-      return result.sort((a, b) => a.time - b.time);
-    }
-
-    // --- VÒNG LẶP ĐỒNG BỘ ---
-    async function startSync() {
-      if (!accessToken) {
-        alert("Vui lòng bấm '1. Kết nối Spotify' trước!");
-        return;
-      }
-
-      if (syncInterval) clearInterval(syncInterval);
-
-      syncInterval = setInterval(async () => {
         const data = await getCurrentlyPlaying();
-        
-        if (!data || !data.is_playing) {
-          if (lastDisplayedLyric !== "Spotify đang tạm dừng...") {
-            updateDisplay("Spotify đang tạm dừng...", "");
-            lastDisplayedLyric = "Spotify đang tạm dừng...";
+
+        if (!data || !data.is_playing || !data.item) {
+          if (syncInterval && lastDisplayedLyric !== 'Spotify đang tạm dừng...') {
+            updateDisplay('Spotify đang tạm dừng...', '');
+            lastDisplayedLyric = 'Spotify đang tạm dừng...';
           }
           return;
         }
 
         const songTitle = data.item.name;
-        const artistName = data.item.artists[0].name;
+        const artistName = data.item.artists?.[0]?.name || '';
         const progressSec = data.progress_ms / 1000;
 
         if (currentTrackName !== songTitle) {
           currentTrackName = songTitle;
-          document.getElementById('status').innerText = `Đang phát: ${songTitle} - ${artistName}`;
+          setStatus(`Đang phát: ${songTitle} - ${artistName}`);
           parsedLyrics = await fetchLyrics(songTitle, artistName);
-          lastDisplayedLyric = ""; 
+          lastDisplayedLyric = '';
         }
 
         if (parsedLyrics.length === 0) {
-          if (lastDisplayedLyric !== "Không tìm thấy lời bài hát đồng bộ") {
-            updateDisplay("Không tìm thấy lời bài hát đồng bộ", songTitle);
-            lastDisplayedLyric = "Không tìm thấy lời bài hát đồng bộ";
+          if (lastDisplayedLyric !== 'Không tìm thấy lời bài hát đồng bộ') {
+            updateDisplay('Không tìm thấy lời bài hát đồng bộ', songTitle);
+            lastDisplayedLyric = 'Không tìm thấy lời bài hát đồng bộ';
           }
           return;
         }
@@ -319,54 +278,50 @@
         if (currentIndex !== -1) {
           const currentText = parsedLyrics[currentIndex].text;
           const nextText = (currentIndex + 1 < parsedLyrics.length) ? parsedLyrics[currentIndex + 1].text : '';
-          
           if (currentText !== lastDisplayedLyric) {
             updateDisplay(currentText, nextText);
             lastDisplayedLyric = currentText;
           }
         }
-      }, 1500); 
-    }
-
-    // --- CẬP NHẬT GIAO DIỆN, LOCKSCREEN & PIP ---
-    function updateDisplay(currentText, nextText) {
-      document.getElementById('current-line').innerText = currentText;
-      document.getElementById('next-line').innerText = nextText;
-
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: currentText,
-          artist: nextText,
-          album: 'Spotify Live Lyrics'
-        });
+      } catch (e) {
+        console.error(e);
+      } finally {
+        busy = false;
       }
+    }, 1500);
+  }
 
-      ctx.fillStyle = '#121212';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#1DB954';
-      ctx.font = 'bold 28px -apple-system, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(currentText, canvas.width / 2, 130);
-      ctx.fillStyle = '#888888';
-      ctx.font = '20px -apple-system, sans-serif';
-      ctx.fillText(nextText, canvas.width / 2, 190);
+  function updateDisplay(currentText, nextText) {
+    document.getElementById('current-line').innerText = currentText;
+    document.getElementById('next-line').innerText = nextText;
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentText,
+        artist: nextText,
+        album: 'Spotify Live Lyrics'
+      });
     }
 
-    // --- PICTURE IN PICTURE ---
-    async function togglePiP() {
-      try {
-        if (document.pictureInPictureElement) {
-          await document.exitPictureInPicture();
-        } else {
-          const stream = canvas.captureStream(30);
-          video.srcObject = stream;
-          await video.play();
-          await video.requestPictureInPicture();
-        }
-      } catch (err) {
-        alert("Thiết bị không hỗ trợ PiP hoặc cần tương tác thêm.");
+    ctx.fillStyle = '#121212';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#1DB954';
+    ctx.font = 'bold 28px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(currentText, canvas.width / 2, 130);
+    ctx.fillStyle = '#888888';
+    ctx.font = '20px -apple-system, sans-serif';
+    ctx.fillText(nextText, canvas.width / 2, 190);
+  }
+
+  async function togglePiP() {
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else {
+        video.srcObject = canvas.captureStream(30);
+        await video.play();
+        await video.requestPictureInPicture();
       }
-    }
-  </script>
-</body>
-</html>
+    } catch (err) { alert('Trình duyệt không hỗ trợ PiP.'); }
+  }
+</script>
