@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Spotify Realtime Lyrics PWA</title>
   
-  <!-- Cấu hình chuẩn Web App -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,63 +12,14 @@
 
   <style>
     * { box-sizing: border-box; }
-    body {
-      background-color: #121212;
-      color: #ffffff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      margin: 0;
-      padding: 20px;
-      text-align: center;
-    }
+    body { background-color: #121212; color: #ffffff; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }
     h1 { color: #1DB954; font-size: 1.5rem; margin-bottom: 8px; }
     .status { color: #aaaaaa; font-size: 0.9rem; margin-bottom: 24px; }
-    .btn {
-      background-color: #1DB954;
-      color: #000000;
-      border: none;
-      padding: 14px 24px;
-      border-radius: 25px;
-      font-size: 0.95rem;
-      font-weight: bold;
-      cursor: pointer;
-      margin: 8px;
-      width: 100%;
-      max-width: 320px;
-      transition: background-color 0.2s, transform 0.1s;
-    }
+    .btn { background-color: #1DB954; color: #000000; border: none; padding: 14px 24px; border-radius: 25px; font-size: 0.95rem; font-weight: bold; cursor: pointer; margin: 8px; width: 100%; max-width: 320px; }
     .btn:active { background-color: #1ed760; transform: scale(0.98); }
-    #lyrics-container {
-      margin-top: 24px;
-      padding: 20px;
-      border-radius: 16px;
-      background: #181818;
-      width: 100%;
-      max-width: 360px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    }
-    .current-line {
-      color: #1DB954;
-      font-size: 1.25rem;
-      font-weight: bold;
-      margin-bottom: 12px;
-      min-height: 50px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .next-line {
-      color: #777777;
-      font-size: 0.95rem;
-      min-height: 30px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
+    #lyrics-container { margin-top: 24px; padding: 20px; border-radius: 16px; background: #181818; width: 100%; max-width: 360px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    .current-line { color: #1DB954; font-size: 1.25rem; font-weight: bold; margin-bottom: 12px; min-height: 50px; display: flex; align-items: center; justify-content: center; }
+    .next-line { color: #777777; font-size: 0.95rem; min-height: 30px; display: flex; align-items: center; justify-content: center; }
     canvas, video { display: none; }
   </style>
 </head>
@@ -79,30 +29,26 @@
   <div id="status" class="status">Chưa đăng nhập Spotify</div>
 
   <button id="btn-login" class="btn">1. Kết nối Spotify</button>
-  <button id="btn-sync" class="btn">2. Bật Lời LockScreen</button>
-  <button id="btn-pip" class="btn">3. Bật Cửa sổ nổi (PiP)</button>
+  <button id="btn-sync" class="btn">2. Bật Lời LockScreen (Chỉ dùng khi nghe nhạc trên PC/Mac)</button>
+  <button id="btn-pip" class="btn">3. Bật Cửa sổ nổi PiP (Dùng khi nghe nhạc trên iPhone)</button>
 
   <div id="lyrics-container">
     <div id="current-line" class="current-line">Bấm 'Kết nối Spotify' để bắt đầu</div>
     <div id="next-line" class="next-line">---</div>
   </div>
-
-  <!-- Audio im lặng để ép iOS cho phép chạy ngầm (LockScreen) -->
+  
+  <!-- Nhạc giả lập để ép iOS cho phép hiển thị lên Lock Screen -->
   <audio id="silent-audio" loop playsinline src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
   
   <canvas id="pip-canvas" width="600" height="300"></canvas>
   <video id="pip-video" autoplay playsinline muted></video>
 
   <script>
-    // ==========================================
-    // CẤU HÌNH SPOTIFY (CLIENT SECRET FLOW)
-    // ==========================================
     const CLIENT_ID = 'f915e38eaca44da3b7f38e9708f3b6d1';
     const CLIENT_SECRET = 'c7998fe9b4ab4dcb837ec1c9894f54fe';
     const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
     const SCOPES = 'user-read-currently-playing user-read-playback-state';
 
-    // Biến toàn cục & Quản lý Token
     let accessToken = localStorage.getItem('sp_acc_token');
     let refreshToken = localStorage.getItem('sp_ref_token');
     let expiresAt = parseInt(localStorage.getItem('sp_exp_time') || '0');
@@ -111,7 +57,7 @@
     let parsedLyrics = [];
     let syncInterval = null;
     let lastDisplayedLyric = '';
-    let busy = false; // Tránh gọi API chồng chéo
+    let busy = false; 
 
     const silentAudio = document.getElementById('silent-audio');
     const canvas = document.getElementById('pip-canvas');
@@ -119,23 +65,27 @@
     const video = document.getElementById('pip-video');
     const setStatus = (t) => document.getElementById('status').innerText = t;
 
-    // --- MỞ KHÓA AUDIO CHO iOS BẰNG CÁCH CHẠM ---
+    // Mở khóa Audio giả lập khi người dùng chạm màn hình
     document.body.addEventListener('touchstart', () => {
       if (silentAudio.paused) silentAudio.play().catch(() => {});
     }, { once: true });
 
     document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('btn-login').addEventListener('click', loginSpotify);
+      
       document.getElementById('btn-sync').addEventListener('click', () => {
         silentAudio.play().catch(() => {});
-        startSync();
+        startSync(true); // Truyền cờ true để biết đang bật Lock Screen
       });
-      document.getElementById('btn-pip').addEventListener('click', togglePiP);
+
+      document.getElementById('btn-pip').addEventListener('click', () => {
+        startSync(false); // PiP không cần Audio giả lập
+        togglePiP();
+      });
 
       const args = new URLSearchParams(window.location.search);
       const code = args.get('code');
 
-      // Xử lý callback sau khi đăng nhập
       if (code) {
         setStatus('Đang xử lý Token...');
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -145,14 +95,11 @@
       if (accessToken) setStatus('✓ Đã kết nối Spotify thành công!');
     });
 
-    // --- LƯU TRỮ TOKEN ---
     function saveTokens(data) {
       accessToken = data.access_token;
-      // Trừ hao 1 phút (60000ms) để an toàn
       expiresAt = Date.now() + ((data.expires_in || 3600) * 1000) - 60000; 
       localStorage.setItem('sp_acc_token', accessToken);
       localStorage.setItem('sp_exp_time', expiresAt);
-      
       if (data.refresh_token) {
         refreshToken = data.refresh_token;
         localStorage.setItem('sp_ref_token', refreshToken);
@@ -166,19 +113,17 @@
       localStorage.removeItem('sp_exp_time');
     }
 
-    // --- 1. ĐĂNG NHẬP (LẤY CODE) ---
     function loginSpotify() {
       const params = new URLSearchParams({
         response_type: 'code',
         client_id: CLIENT_ID,
         scope: SCOPES,
         redirect_uri: REDIRECT_URI,
-        show_dialog: 'false' // Đã ok rồi thì không cần ép hiện dialog nữa
+        show_dialog: 'false' 
       });
       window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
     }
 
-    // --- 2. ĐỔI CODE LẤY TOKEN BẰNG CLIENT SECRET ---
     async function fetchAccessToken(code) {
       const basicAuth = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
       try {
@@ -198,13 +143,10 @@
         if (data.access_token) {
           saveTokens(data);
           setStatus('✓ Đã kết nối Spotify thành công!');
-        } else {
-          alert('Spotify từ chối cấp Token:\n' + JSON.stringify(data));
         }
       } catch (err) { alert('Lỗi mạng khi cấp Token!'); }
     }
 
-    // --- 3. TỰ ĐỘNG LÀM MỚI TOKEN KHI HẾT HẠN ---
     async function refreshAccessToken() {
       if (!refreshToken) return false;
       const basicAuth = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`);
@@ -231,12 +173,10 @@
 
     async function ensureValidToken() {
       if (!accessToken) return false;
-      // Nếu hết hạn, tự động refresh
       if (Date.now() >= expiresAt) return await refreshAccessToken();
       return true;
     }
 
-    // --- GỌI API SPOTIFY & LRCLIB ---
     function stopSync(msg) {
       clearInterval(syncInterval);
       syncInterval = null;
@@ -246,7 +186,7 @@
     async function getCurrentlyPlaying(retried = false) {
       if (!(await ensureValidToken())) {
         clearTokens();
-        stopSync('Phiên hết hạn, hãy bấm "1. Kết nối Spotify" lại.');
+        stopSync('Phiên hết hạn, hãy kết nối lại.');
         return null;
       }
 
@@ -257,17 +197,12 @@
 
         if (response.status === 204) return null;
         if (response.status === 401) {
-          // Thử refresh khẩn cấp
           if (!retried && await refreshAccessToken()) return getCurrentlyPlaying(true);
           clearTokens();
           stopSync('Bị từ chối. Hãy đăng nhập lại.');
           return null;
         }
-        if (response.status === 403) {
-          stopSync('Lỗi 403. Spotify từ chối.');
-          return null;
-        }
-        if (response.status === 429 || !response.ok) return null;
+        if (response.status === 403 || response.status === 429 || !response.ok) return null;
         return await response.json();
       } catch (err) { return null; }
     }
@@ -295,13 +230,12 @@
       return result.sort((a, b) => a.time - b.time);
     }
 
-    // --- VÒNG LẶP ĐỒNG BỘ CHÍNH ---
-    async function startSync() {
+    async function startSync(useLockScreen = false) {
       if (!accessToken) {
         alert("Vui lòng bấm '1. Kết nối Spotify' trước!");
         return;
       }
-      if (syncInterval) clearInterval(syncInterval);
+      if (syncInterval) return; 
 
       syncInterval = setInterval(async () => {
         if (busy) return;
@@ -310,8 +244,8 @@
           const data = await getCurrentlyPlaying();
 
           if (!data || !data.is_playing || !data.item) {
-            if (syncInterval && lastDisplayedLyric !== 'Spotify đang tạm dừng...') {
-              updateDisplay('Spotify đang tạm dừng...', '');
+            if (lastDisplayedLyric !== 'Spotify đang tạm dừng...') {
+              updateDisplay('Spotify đang tạm dừng...', '', useLockScreen);
               lastDisplayedLyric = 'Spotify đang tạm dừng...';
             }
             return;
@@ -329,9 +263,9 @@
           }
 
           if (parsedLyrics.length === 0) {
-            if (lastDisplayedLyric !== 'Không tìm thấy lời bài hát đồng bộ') {
-              updateDisplay('Không tìm thấy lời bài hát đồng bộ', songTitle);
-              lastDisplayedLyric = 'Không tìm thấy lời bài hát đồng bộ';
+            if (lastDisplayedLyric !== 'Không tìm thấy lời') {
+              updateDisplay('Không tìm thấy lời', songTitle, useLockScreen);
+              lastDisplayedLyric = 'Không tìm thấy lời';
             }
             return;
           }
@@ -346,7 +280,7 @@
             const currentText = parsedLyrics[currentIndex].text;
             const nextText = (currentIndex + 1 < parsedLyrics.length) ? parsedLyrics[currentIndex + 1].text : '';
             if (currentText !== lastDisplayedLyric) {
-              updateDisplay(currentText, nextText);
+              updateDisplay(currentText, nextText, useLockScreen);
               lastDisplayedLyric = currentText;
             }
           }
@@ -358,12 +292,11 @@
       }, 1500);
     }
 
-    // --- CẬP NHẬT GIAO DIỆN (UI + LOCKSCREEN + PIP) ---
-    function updateDisplay(currentText, nextText) {
+    function updateDisplay(currentText, nextText, useLockScreen) {
       document.getElementById('current-line').innerText = currentText;
       document.getElementById('next-line').innerText = nextText;
 
-      if ('mediaSession' in navigator) {
+      if (useLockScreen && 'mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: currentText,
           artist: nextText,
@@ -382,7 +315,6 @@
       ctx.fillText(nextText, canvas.width / 2, 190);
     }
 
-    // --- PICTURE IN PICTURE (PIP) ---
     async function togglePiP() {
       try {
         if (document.pictureInPictureElement) {
@@ -392,7 +324,7 @@
           await video.play();
           await video.requestPictureInPicture();
         }
-      } catch (err) { alert('Thiết bị không hỗ trợ PiP.'); }
+      } catch (err) { alert('Thiết bị không hỗ trợ Cửa sổ nổi.'); }
     }
   </script>
 </body>
