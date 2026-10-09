@@ -74,12 +74,11 @@
 
   <script>
     // === CẤU HÌNH SPOTIFY ===
-    // Thay CLIENT_ID bằng Client ID từ Spotify Developer Dashboard của bạn
-    const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
+    const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704'; // Điền Client ID từ Spotify Dashboard
     const REDIRECT_URI = window.location.href.split('#')[0].split('?')[0];
     const SCOPES = 'user-read-currently-playing user-read-playback-state';
 
-    let accessToken = null;
+    let accessToken = localStorage.getItem('access_token');
     let currentTrack = '';
     let parsedLyrics = [];
     let syncTimer = null;
@@ -89,167 +88,17 @@
     const ctx = canvas.getContext('2d');
     const video = document.getElementById('pip-video');
 
-    // 1. Đăng nhập Spotify (Implicit Grant)
-    function loginSpotify() {
-      const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPES)}`;
-      window.location.href = authUrl;
-    }
-
-    // 2. Bóc tách Access Token từ URL
-    function checkToken() {
-      const hash = window.location.hash.substring(1);
-      const params = new URLSearchParams(hash);
-      if (params.has('access_token')) {
-        accessToken = params.get('access_token');
-        document.getElementById('status').innerText = 'Đã kết nối Spotify thành công!';
-        window.location.hash = '';
+    // === CÁC HÀM XỬ LÝ PKCE AUTHENTICATION ===
+    function generateRandomString(length) {
+      let text = '';
+      let possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      for (let i = 0; i < length; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
       }
-    }
-    checkToken();
-
-    // 3. Lấy bài hát đang phát từ Spotify
-    async function getCurrentlyPlaying() {
-      if (!accessToken) return null;
-      try {
-        const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        if (res.status === 204 || res.status > 400) return null;
-        return await res.json();
-      } catch (err) {
-        return null;
-      }
+      return text;
     }
 
-    // 4. Lấy Lời bài hát (.LRC) từ LRCLIB API miễn phí
-    async function fetchLyrics(trackName, artistName) {
-      try {
-        const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(trackName)}&artist_name=${encodeURIComponent(artistName)}`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data && data.syncedLyrics) {
-          return parseLRC(data.syncedLyrics);
-        }
-      } catch (e) {
-        console.log("Không tìm thấy lời bài hát");
-      }
-      return [];
-    }
-
-    // 5. Hàm Parse chuỗi .LRC thành Mảng mốc thời gian
-    function parseLRC(lrcText) {
-      const lines = lrcText.split('\n');
-      const result = [];
-      const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
-
-      for (let line of lines) {
-        const match = line.match(regex);
-        if (match) {
-          const min = parseFloat(match[1]);
-          const sec = parseFloat(match[2]);
-          const ms = parseFloat(match[3]) / (match[3].length === 3 ? 1000 : 100);
-          const time = min * 60 + sec + ms;
-          const text = match[4].trim();
-          if (text) result.push({ time, text });
-        }
-      }
-      return result.sort((a, b) => a.time - b.time);
-    }
-
-    // 6. Chạy bộ đồng bộ Lời Nhạc
-    async function startSync() {
-      if (!accessToken) {
-        alert("Vui lòng bấm '1. Kết nối Spotify' trước!");
-        return;
-      }
-
-      // Kích hoạt Audio im lặng để giữ LockScreen Player
-      silentAudio.play().catch(() => {});
-
-      if (syncTimer) clearInterval(syncTimer);
-
-      syncTimer = setInterval(async () => {
-        const data = await getCurrentlyPlaying();
-        if (!data || !data.is_playing) {
-          updateUI("Spotify đang dừng nhạc...", "");
-          return;
-        }
-
-        const songTitle = data.item.name;
-        const artistName = data.item.artists[0].name;
-        const progressSec = data.progress_ms / 1000;
-
-        // Nếu chuyển bài hát mới -> Tải lại lời nhạc
-        if (currentTrack !== songTitle) {
-          currentTrack = songTitle;
-          document.getElementById('status').innerText = `Đang phát: ${songTitle} - ${artistName}`;
-          parsedLyrics = await fetchLyrics(songTitle, artistName);
-        }
-
-        if (parsedLyrics.length === 0) {
-          updateUI("Không tìm thấy lời đồng bộ", songTitle);
-          return;
-        }
-
-        // Tìm mốc câu hát hiện tại
-        let currentIndex = -1;
-        for (let i = 0; i < parsedLyrics.length; i++) {
-          if (progressSec >= parsedLyrics[i].time) {
-            currentIndex = i;
-          } else {
-            break;
-          }
-        }
-
-        if (currentIndex !== -1) {
-          const currentText = parsedLyrics[currentIndex].text;
-          const nextText = (currentIndex + 1 < parsedLyrics.length) ? parsedLyrics[currentIndex + 1].text : '';
-          updateUI(currentText, nextText);
-        }
-      }, 1000); // Cập nhật vị trí mỗi giây
-    }
-
-    // 7. Cập nhật UI, LockScreen và Canvas
-    function updateUI(current, next) {
-      document.getElementById('current-line').innerText = current;
-      document.getElementById('next-line').innerText = next;
-
-      // Cập nhật Màn hình khóa
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: current,
-          artist: next,
-          album: 'Spotify Live Lyrics'
-        });
-      }
-
-      // Vẽ Canvas PiP
-      ctx.fillStyle = '#121212';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#1DB954';
-      ctx.font = 'bold 30px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(current, canvas.width / 2, 130);
-      ctx.fillStyle = '#888888';
-      ctx.font = '20px sans-serif';
-      ctx.fillText(next, canvas.width / 2, 190);
-    }
-
-    // 8. Bật Cửa sổ nổi Picture-in-Picture
-    async function togglePiP() {
-      try {
-        if (document.pictureInPictureElement) {
-          await document.exitPictureInPicture();
-        } else {
-          const stream = canvas.captureStream(30);
-          video.srcObject = stream;
-          await video.play();
-          await video.requestPictureInPicture();
-        }
-      } catch (err) {
-        alert("Thiết bị yêu cầu tương tác trực tiếp hoặc không hỗ trợ PiP.");
-      }
-    }
-  </script>
-</body>
-</html>
+    async function generateCodeChallenge(codeVerifier) {
+      const data = new TextEncoder().encode(codeVerifier);
+      const digest = await window.crypto.subtle.digest('SHA-256', data);
+      return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
