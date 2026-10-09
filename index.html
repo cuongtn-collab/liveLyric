@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Spotify Realtime Lyrics PWA</title>
   
-  <!-- Chuẩn PWA di động mới nhất -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -93,24 +92,26 @@
     <div id="next-line" class="next-line">---</div>
   </div>
 
-  <!-- Audio im lặng Base64 Data URI không bao giờ lỗi 404 -->
-  <audio id="silent-audio" loop src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
+  <!-- Audio im lặng Base64 Data URI giúp duy trì chạy nền không bị chặn 404 -->
+  <audio id="silent-audio" loop playsinline src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
   
   <canvas id="pip-canvas" width="600" height="300"></canvas>
   <video id="pip-video" autoplay playsinline muted></video>
 
   <script>
     // ==========================================
-    // CẤU HÌNH SPOTIFY (PKCE FLOW)
+    // CẤU HÌNH SPOTIFY (THAY CLIENT_ID CỦA BẠN VÀO ĐÂY)
     // ==========================================
     const CLIENT_ID = '44ec39575f584e37935e2a5f74f56704';
     const REDIRECT_URI = 'https://cuongtn-collab.github.io/liveLyric/';
     const SCOPES = 'user-read-currently-playing user-read-playback-state';
 
+    // Biến toàn cục
     let accessToken = localStorage.getItem('spotify_access_token');
     let currentTrackName = '';
     let parsedLyrics = [];
     let syncInterval = null;
+    let lastDisplayedLyric = ''; // BIẾN CHỐNG LAG: Lưu câu hát đang hiển thị
 
     const silentAudio = document.getElementById('silent-audio');
     const canvas = document.getElementById('pip-canvas');
@@ -122,7 +123,6 @@
       document.getElementById('btn-sync').addEventListener('click', startSync);
       document.getElementById('btn-pip').addEventListener('click', togglePiP);
       
-      // Xử lý callback sau khi Spotify redirect về với mã 'code'
       const args = new URLSearchParams(window.location.search);
       const code = args.get('code');
 
@@ -136,53 +136,45 @@
       }
     });
 
-    // --- HÀM HỖ TRỢ PKCE (Mã hóa bảo mật) ---
+    // --- HÀM PKCE BẢO MẬT ---
     function generateRandomString(length) {
       let text = '';
-      let possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-      for (let i = 0; i < length; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-      }
+      const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      for (let i = 0; i < length; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
       return text;
     }
 
     async function generateCodeChallenge(codeVerifier) {
-      function base64encode(string) {
-        return btoa(String.fromCharCode.apply(null, new Uint8Array(string)))
-          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      }
       const encoder = new TextEncoder();
       const data = encoder.encode(codeVerifier);
       const digest = await window.crypto.subtle.digest('SHA-256', data);
-      return base64encode(digest);
+      return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
 
-    // --- BƯỚC 1: ĐĂNG NHẬP SPOTIFY (PKCE) ---
+    // --- ĐĂNG NHẬP SPOTIFY ---
     async function loginSpotify() {
       const codeVerifier = generateRandomString(128);
       const codeChallenge = await generateCodeChallenge(codeVerifier);
       localStorage.setItem('code_verifier', codeVerifier);
 
-      const state = generateRandomString(16);
-      const authUrl = new URL("https://accounts.spotify.com/authorize");
-
-      const params = {
+      const params = new URLSearchParams({
         response_type: 'code',
         client_id: CLIENT_ID,
         scope: SCOPES,
         redirect_uri: REDIRECT_URI,
-        state: state,
+        state: generateRandomString(16),
         code_challenge_method: 'S256',
-        code_challenge: codeChallenge
-      };
+        code_challenge: codeChallenge,
+        show_dialog: 'true' // Ép cấp quyền lại để sửa lỗi 403 Cache
+      });
 
-      authUrl.search = new URLSearchParams(params).toString();
-      window.location.href = authUrl.toString();
+      window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
     }
 
-    // --- BƯỚC 2: ĐỔI CODE LẤY ACCESS TOKEN ---
+    // --- LẤY ACCESS TOKEN ---
     async function fetchAccessToken(code) {
-      let codeVerifier = localStorage.getItem('code_verifier');
+      const codeVerifier = localStorage.getItem('code_verifier');
       if (!codeVerifier) return;
 
       try {
@@ -208,7 +200,7 @@
       }
     }
 
-    // --- GỌI SPOTIFY API LẤY TRẠNG THÁI PHÁT NHẠC ---
+    // --- API CALLS ---
     async function getCurrentlyPlaying() {
       if (!accessToken) return null;
       try {
@@ -222,59 +214,58 @@
       }
     }
 
-    // --- LẤY LỜI BÀI HÁT TỪ LRCLIB ---
     async function fetchLyrics(trackName, artistName) {
       try {
         const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(trackName)}&artist_name=${encodeURIComponent(artistName)}`;
         const response = await fetch(url);
         if (!response.ok) return [];
         const data = await response.json();
-        if (data && data.syncedLyrics) {
-          return parseLRC(data.syncedLyrics);
-        }
+        return data && data.syncedLyrics ? parseLRC(data.syncedLyrics) : [];
       } catch (err) {
-        console.warn("Không thể tải lời:", err);
+        return [];
       }
-      return [];
     }
 
-    // --- PARSE CHUỖI ĐỊNH DẠNG .LRC ---
     function parseLRC(lrcText) {
-      const lines = lrcText.split('\n');
       const result = [];
       const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
-
-      for (let line of lines) {
+      lrcText.split('\n').forEach(line => {
         const match = line.match(regex);
-        if (match) {
-          const min = parseFloat(match[1]);
-          const sec = parseFloat(match[2]);
-          const msStr = match[3];
-          const ms = parseFloat(msStr) / (msStr.length === 3 ? 1000 : 100);
-          const totalTime = min * 60 + sec + ms;
-          const text = match[4].trim();
-          if (text) result.push({ time: totalTime, text: text });
+        if (match && match[4].trim()) {
+          const totalTime = parseInt(match[1]) * 60 + parseInt(match[2]) + parseFloat(`0.${match[3]}`);
+          result.push({ time: totalTime, text: match[4].trim() });
         }
-      }
+      });
       return result.sort((a, b) => a.time - b.time);
     }
 
-    // --- CHẠY VÒNG LẶP ĐỒNG BỘ LỜI NHẠC ---
+    // --- VÒNG LẶP ĐỒNG BỘ TỐI ƯU ---
     async function startSync() {
       if (!accessToken) {
         alert("Vui lòng bấm '1. Kết nối Spotify' trước!");
         return;
       }
 
-      silentAudio.play().catch(e => console.log("Cần tương tác để phát audio"));
+      // 1. Kích hoạt Audio Nền
+      try {
+        await silentAudio.play();
+        console.log("Audio nền đã khởi chạy");
+      } catch (e) {
+        alert("Trình duyệt chặn chạy nền. Vui lòng chạm vào màn hình và bấm lại.");
+        return;
+      }
 
       if (syncInterval) clearInterval(syncInterval);
 
+      // 2. Lặp mỗi 1.5s để giảm tải
       syncInterval = setInterval(async () => {
         const data = await getCurrentlyPlaying();
         
         if (!data || !data.is_playing) {
-          updateDisplay("Spotify đang tạm dừng...", "");
+          if (lastDisplayedLyric !== "Spotify đang tạm dừng...") {
+            updateDisplay("Spotify đang tạm dừng...", "");
+            lastDisplayedLyric = "Spotify đang tạm dừng...";
+          }
           return;
         }
 
@@ -282,40 +273,48 @@
         const artistName = data.item.artists[0].name;
         const progressSec = data.progress_ms / 1000;
 
+        // Nếu chuyển bài hát
         if (currentTrackName !== songTitle) {
           currentTrackName = songTitle;
           document.getElementById('status').innerText = `Đang phát: ${songTitle} - ${artistName}`;
           parsedLyrics = await fetchLyrics(songTitle, artistName);
+          lastDisplayedLyric = ""; // Reset trạng thái chống lag
         }
 
         if (parsedLyrics.length === 0) {
-          updateDisplay("Không tìm thấy lời bài hát đồng bộ", songTitle);
+          if (lastDisplayedLyric !== "Không tìm thấy lời bài hát đồng bộ") {
+            updateDisplay("Không tìm thấy lời bài hát đồng bộ", songTitle);
+            lastDisplayedLyric = "Không tìm thấy lời bài hát đồng bộ";
+          }
           return;
         }
 
+        // Tìm câu hát (+0.3s để bù độ trễ mạng)
         let currentIndex = -1;
         for (let i = 0; i < parsedLyrics.length; i++) {
-          if (progressSec >= parsedLyrics[i].time) {
-            currentIndex = i;
-          } else {
-            break;
-          }
+          if (progressSec + 0.3 >= parsedLyrics[i].time) currentIndex = i;
+          else break;
         }
 
         if (currentIndex !== -1) {
           const currentText = parsedLyrics[currentIndex].text;
           const nextText = (currentIndex + 1 < parsedLyrics.length) ? parsedLyrics[currentIndex + 1].text : '';
-          updateDisplay(currentText, nextText);
+          
+          // 3. CHÌA KHÓA CHỐNG LAG: Chỉ Render và Đẩy dữ liệu khi câu hát thay đổi
+          if (currentText !== lastDisplayedLyric) {
+            updateDisplay(currentText, nextText);
+            lastDisplayedLyric = currentText;
+          }
         }
-      }, 1000);
+      }, 1500); 
     }
 
-    // --- CẬP NHẬT GIAO DIỆN, LOCKSCREEN & PIP ---
+    // --- CẬP NHẬT UI, MEDIA SESSION & CANVAS ---
     function updateDisplay(currentText, nextText) {
       document.getElementById('current-line').innerText = currentText;
       document.getElementById('next-line').innerText = nextText;
 
-      // Đẩy lên Màn hình khóa iOS (Media Session API)
+      // Cập nhật Màn hình khóa
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: currentText,
@@ -324,7 +323,7 @@
         });
       }
 
-      // Vẽ lên Canvas phục vụ Cửa sổ nổi Picture-in-Picture
+      // Cập nhật PiP
       ctx.fillStyle = '#121212';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#1DB954';
@@ -336,7 +335,7 @@
       ctx.fillText(nextText, canvas.width / 2, 190);
     }
 
-    // --- BẬT / TẮT CỬA SỔ NỔI PICTURE-IN-PICTURE ---
+    // --- PICTURE IN PICTURE ---
     async function togglePiP() {
       try {
         if (document.pictureInPictureElement) {
@@ -348,7 +347,7 @@
           await video.requestPictureInPicture();
         }
       } catch (err) {
-        alert("Trình duyệt không hỗ trợ PiP hoặc cần thao tác trực tiếp.");
+        alert("Thiết bị không hỗ trợ PiP hoặc cần tương tác thêm.");
       }
     }
   </script>
